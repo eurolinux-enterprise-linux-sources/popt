@@ -1,0 +1,70 @@
+Kludge poptBadOption() to return something semi-meaningful on exec alias fail
+
+- poptBadOption() is totally unaware of exec alias failures, and
+  will return either the first argument or last option, giving
+  wonderfully misleading error messages (#697435, #710267).
+- Remember execvp() first argument on failure and return that
+  from poptBadOption() if present to give the user a reasonable
+  clue what exactly went wrong.
+
+diff -up popt-1.13/popt.c.execfail popt-1.13/popt.c
+--- popt-1.13/popt.c.execfail	2012-08-02 16:08:34.762315304 +0300
++++ popt-1.13/popt.c	2012-08-02 16:11:41.352683721 +0300
+@@ -186,6 +186,7 @@ poptContext poptGetContext(const char *
+     con->flags = flags;
+     con->execs = NULL;
+     con->numExecs = 0;
++    con->execFail = NULL;
+     con->finalArgvAlloced = argc * 2;
+     con->finalArgv = calloc( con->finalArgvAlloced, sizeof(*con->finalArgv) );
+     con->execAbsolute = 1;
+@@ -234,6 +235,7 @@ void poptResetContext(poptContext con)
+     con->nextLeftover = 0;
+     con->restLeftover = 0;
+     con->doExec = NULL;
++    con->execFail = _free(con->execFail);
+ 
+     if (con->finalArgv != NULL)
+     for (i = 0; i < con->finalArgvCount; i++) {
+@@ -468,6 +470,7 @@ if (_popt_debug)
+ /*@-nullstate@*/
+     rc = execvp(argv[0], (char *const *)argv);
+ /*@=nullstate@*/
++    con->execFail = xstrdup(argv[0]);
+ 
+ exit:
+     if (argv) {
+@@ -1194,11 +1197,19 @@ int poptAddItem(poptContext con, poptIte
+ const char * poptBadOption(poptContext con, unsigned int flags)
+ {
+     struct optionStackEntry * os = NULL;
++    const char *badOpt = NULL;
+ 
+-    if (con != NULL)
+-	os = (flags & POPT_BADOPTION_NOALIAS) ? con->optionStack : con->os;
++    if (con != NULL) {
++	/* Stupid hack to return something semi-meaningful from exec failure */
++	if (con->execFail) {
++	    badOpt = con->execFail;
++	} else {
++	    os = (flags & POPT_BADOPTION_NOALIAS) ? con->optionStack : con->os;
++	    badOpt = os->argv[os->next - 1];
++	}
++    }
+ 
+-    return (os != NULL && os->argv != NULL ? os->argv[os->next - 1] : NULL);
++    return badOpt;
+ }
+ 
+ const char * poptStrerror(const int error)
+diff -up popt-1.13/poptint.h.execfail popt-1.13/poptint.h
+--- popt-1.13/poptint.h.execfail	2012-08-02 16:08:34.000000000 +0300
++++ popt-1.13/poptint.h	2012-08-02 16:12:35.796500122 +0300
+@@ -78,6 +78,7 @@ struct poptContext_s {
+ /*@owned@*/ /*@null@*/
+     poptItem execs;
+     int numExecs;
++    char * execFail;
+ /*@only@*/ /*@null@*/
+     const char ** finalArgv;
+     int finalArgvCount;
